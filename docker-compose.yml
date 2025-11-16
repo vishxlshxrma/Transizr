@@ -1,0 +1,126 @@
+name: "transizr"
+
+services:
+    # Postgres database
+    db:
+        image: postgres:18.0-alpine3.22
+        container_name: db
+        restart: always
+        networks:
+            - transizr
+        ports:
+            - "5432:5432"
+        environment:
+            - POSTGRES_USER=postgres
+            - POSTGRES_PASSWORD=postgres
+            - POSTGRES_DB=db
+        volumes:
+            - db:/var/lib/postgresql
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U postgres"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    # RabbitMQ message broker
+    message-broker:
+        image: rabbitmq:4.2.0-alpine
+        container_name: message-broker
+        restart: always
+        volumes:
+            - message-broker:/var/lib/rabbitmq
+        networks:
+            - transizr
+        ports:
+            - "5672:5672"
+
+    # Redis PubSub for realtime server side events notifications
+    pub-sub:
+        image: redis:8.2.1-alpine
+        container_name: redis
+        restart: always
+        volumes:
+            - pub-sub:/data
+        networks:
+            - transizr
+        ports:
+            - "6379:6379"
+
+    # Celery task queue for task processing
+    task-queue:
+        build:
+            context: ./backend
+            dockerfile: Dockerfile.task-queue
+        container_name: task-queue
+        networks:
+            - transizr
+        environment:
+            - WORKER_CONCURRENCY=6
+            - CELERY_BACKEND=rpc://
+            - CELERY_BROKER=pyamqp://message-broker
+            - LOCAL_STORAGE_BASE_PATH=${PWD}/backend/data
+            - REDIS_HOST=pub-sub
+            - REDIS_PORT=6379
+            - POSTGRES_HOST=db
+            - POSTGRES_USER=postgres
+            - POSTGRES_PASSWORD=postgres
+            - POSTGRES_PORT=5432
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock
+            - ./backend/data:/task-queue/data
+        depends_on:
+            - db
+            - message-broker
+            - pub-sub
+
+    # Api
+    api:
+        build:
+            context: ./backend
+            dockerfile: Dockerfile.api
+        container_name: api
+        networks:
+            - transizr
+        environment:
+            - WORKER_CONCURRENCY=4
+            - CELERY_BACKEND=rpc://
+            - CELERY_BROKER=pyamqp://message-broker
+            - LOCAL_STORAGE_BASE_PATH=${PWD}/backend/data
+            - REDIS_HOST=pub-sub
+            - REDIS_PORT=6379
+            - POSTGRES_HOST=db
+            - POSTGRES_USER=postgres
+            - POSTGRES_PASSWORD=postgres
+            - POSTGRES_PORT=5432
+        ports:
+            - "8000:8000"
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock
+            - ./backend/data:/api/data
+        depends_on:
+            - task-queue
+
+    # Frontend
+    frontend:
+        build:
+            context: ./frontend
+            dockerfile: Dockerfile
+        container_name: frontend
+        networks:
+            - transizr
+        environment:
+            - NEXT_PUBLIC_BACKEND_API_URL=http://127.0.0.1:8000/api/v1
+        ports:
+            - "3000:3000"
+        depends_on:
+            - api
+
+volumes:
+    db:
+    pub-sub:
+    message-broker:
+
+networks:
+    transizr:
+        name: transizr
+        driver: bridge

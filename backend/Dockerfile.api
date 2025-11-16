@@ -1,0 +1,25 @@
+# Base image
+FROM python:3.11
+
+# Install system dependencies
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg gcc build-essential libpython3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set the working directory to /api
+WORKDIR /api
+
+# Copy the requirements.txt file
+COPY ./requirements.txt /api
+
+# Install any needed packages specified in requirements.txt
+RUN pip install --no-cache-dir --upgrade -r /api/requirements.txt
+
+# Copy the files and folder into the container
+COPY ./app /api/app
+
+# Make port 8000 available to the world outside this container
+EXPOSE 8000
+
+# Run the api
+CMD [ "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000" ]
